@@ -5,4 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+envy = "0.4"
+log = "0.4.33"
+logforth = { version = "0.30.1", features = ["starter-log"] }
