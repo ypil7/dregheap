@@ -1,3 +1,5 @@
+use core::panic;
+
 use tokio::net::{TcpListener};
 
 mod config;
@@ -5,6 +7,7 @@ mod config;
 #[tokio::main]
 async fn main() {
     let cfg = config::load_config().unwrap();
+    cfg.validate().unwrap_or_else(|e| panic!("Invalid config: {}", e));
 
     logforth::starter_log::stdout().apply();
 
