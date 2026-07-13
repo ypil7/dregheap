@@ -1,6 +1,8 @@
 use core::panic;
-
-use tokio::net::{TcpListener};
+use tokio::signal;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 mod config;
 
@@ -19,10 +21,56 @@ async fn main() {
 
     log::info!("Starting server on port: {}", cfg.port);
 
-    loop {
-        let (socket, _) = listener.accept().await.unwrap();
-        if let Err(e) = socket.try_write(&[1,2,4]) {
-            panic!("Failed writing bites to buffer: {}", e)
+    let cancel_token = CancellationToken::new();
+    let dispatch_token = cancel_token.clone();
+
+    let dispatch = tokio::spawn( async move {
+        let tracker = TaskTracker::new();
+
+        loop {
+            tokio::select!{
+                _ = dispatch_token.cancelled() => {
+                    break;
+                }
+                res = listener.accept() => {
+                    let (socket, _) = res.unwrap();
+                    tracker.spawn(handle_request(socket));
+                }
+            }
         }
-    }
+
+        tracker.close();
+        tracker.wait().await;
+        log::info!("Shutting down server");
+    });
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    };
+
+    cancel_token.cancel();
+
+    dispatch.await.unwrap();
+}
+
+async fn handle_request(_socket: TcpStream){
+
 }
