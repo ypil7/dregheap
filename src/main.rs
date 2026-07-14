@@ -1,6 +1,6 @@
 use core::panic;
-use tokio::signal;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -9,26 +9,27 @@ mod config;
 #[tokio::main]
 async fn main() {
     let cfg = config::load_config().unwrap();
-    cfg.validate().unwrap_or_else(|e| panic!("Invalid config: {}", e));
+    cfg.validate()
+        .unwrap_or_else(|e| panic!("Invalid config: {}", e));
 
     logforth::starter_log::stdout().apply();
 
     let ip_addr = format!("0.0.0.0:{}", cfg.port);
-    
 
-    let listener = TcpListener::bind(&ip_addr).await
-        .unwrap_or_else( |e| panic!("Failed to bind TCP Listener to: {}, error: {}", &ip_addr, e));
+    let listener = TcpListener::bind(&ip_addr)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind TCP Listener to: {}, error: {}", &ip_addr, e));
 
     log::info!("Starting server on port: {}", cfg.port);
 
     let cancel_token = CancellationToken::new();
     let dispatch_token = cancel_token.clone();
 
-    let dispatch = tokio::spawn( async move {
+    let dispatch = tokio::spawn(async move {
         let tracker = TaskTracker::new();
 
         loop {
-            tokio::select!{
+            tokio::select! {
                 _ = dispatch_token.cancelled() => {
                     break;
                 }
@@ -71,6 +72,4 @@ async fn main() {
     dispatch.await.unwrap();
 }
 
-async fn handle_request(_socket: TcpStream){
-
-}
+async fn handle_request(_socket: TcpStream) {}
