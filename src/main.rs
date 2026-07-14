@@ -4,7 +4,7 @@ use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-mod config;
+use dregheap::config;
 
 #[tokio::main]
 async fn main() {
