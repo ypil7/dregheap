@@ -12,9 +12,9 @@ pub enum RequestMethod {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Request {
-    method: RequestMethod,
-    key: String,
-    value: Option<Vec<u8>>,
+    pub method: RequestMethod,
+    pub key: String,
+    pub value: Option<Vec<u8>>,
 }
 
 impl Request {

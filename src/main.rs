@@ -22,6 +22,8 @@ async fn main() {
 
     log::info!("Starting server on port: {}", cfg.port);
 
+    let store = store::new_store();
+
     let cancel_token = CancellationToken::new();
     let dispatch_token = cancel_token.clone();
 
@@ -35,7 +37,8 @@ async fn main() {
                 }
                 res = listener.accept() => {
                     let (socket, _) = res.unwrap();
-                    tracker.spawn(handler::handle_request(socket));
+                    let store_handle = store.clone();
+                    tracker.spawn(handler::handle_request(socket, store_handle));
                 }
             }
         }
