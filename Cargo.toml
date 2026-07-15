@@ -7,7 +7,7 @@ edition = "2024"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
-rmp-serde = { version = "1", features = ["full"] }
+rmp-serde = { version = "1" }
 serde_repr = "0.1"
 envy = "0.4"
 log = "0.4.33"

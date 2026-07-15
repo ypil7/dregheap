@@ -1,10 +1,10 @@
 use core::panic;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use dregheap::config;
+use dregheap::*;
 
 #[tokio::main]
 async fn main() {
@@ -35,7 +35,7 @@ async fn main() {
                 }
                 res = listener.accept() => {
                     let (socket, _) = res.unwrap();
-                    tracker.spawn(handle_request(socket));
+                    tracker.spawn(handler::handle_request(socket));
                 }
             }
         }
@@ -71,5 +71,3 @@ async fn main() {
 
     dispatch.await.unwrap();
 }
-
-async fn handle_request(_socket: TcpStream) {}

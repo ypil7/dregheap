@@ -1,9 +1,6 @@
 use serde::Deserialize;
-use std::error::Error;
 
-use dregheap::errors::{Result};
-
-use crate::errors;
+use crate::errors::{Error, Result};
 
 #[derive(Deserialize, Debug)]
 pub struct Config {
@@ -12,7 +9,9 @@ pub struct Config {
 }
 
 pub fn load_config() -> Result<Config> {
-    let config = envy::prefixed("DREG_").from_env::<Config>()?;
+    let config = envy::prefixed("DREG_")
+        .from_env::<Config>()
+        .map_err(|_e| Error::Custom("".to_string()))?;
     Ok(config)
 }
 
@@ -23,10 +22,10 @@ fn default_port() -> u16 {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.port < 1024 {
-            return Err(format!(
+            return Err(Error::Custom(format!(
                 "Invalid port number {} port number must be 1025 or greater",
                 self.port
-            ));
+            )));
         }
         Ok(())
     }
