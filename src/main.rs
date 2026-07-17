@@ -1,4 +1,6 @@
 use core::panic;
+use dregheap::store::make_store;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +24,7 @@ async fn main() {
 
     log::info!("Starting server on port: {}", cfg.port);
 
-    let store = store::new_store();
+    let store = Arc::new(Mutex::new(make_store()));
 
     let cancel_token = CancellationToken::new();
     let dispatch_token = cancel_token.clone();
