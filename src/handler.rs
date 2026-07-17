@@ -62,3 +62,42 @@ fn process_request(req: Request, store: AsyncStore) -> Response {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{assert_matches, assert_eq};
+    use std::sync::{Mutex, Arc};
+
+    use crate::store;
+    use super::*;
+
+    #[test]
+    fn set_then_get_returns_value() {
+        let store = Arc::new(Mutex::new(store::make_store()));
+
+        let test_key = "test1".to_string();
+        let test_value: Option<Vec<u8>> = Some("some random test value".into());
+
+        let req = Request {
+            method: protocol::RequestMethod::Set,
+            key: test_key.clone(),
+            value: test_value.clone()
+        };
+
+        let res = process_request(req, store.clone());
+        assert_matches!(res.status, protocol::ResponseStatus::Ok);
+
+        let req = Request {
+            method: protocol::RequestMethod::Get,
+            key: test_key.clone(),
+            value: None
+        };
+        let res = process_request(req, store.clone());
+        assert_matches!(res.status, protocol::ResponseStatus::Ok);
+        assert_eq!(res.value, test_value);
+    }
+
+    #[test]
+    fn get_missing_key_errors() {
+    }
+}
