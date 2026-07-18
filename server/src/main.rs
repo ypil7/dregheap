@@ -1,12 +1,12 @@
 use core::panic;
-use dregheap::store::make_store;
+use server::store::make_store;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use dregheap::*;
+use server::*;
 
 #[tokio::main]
 async fn main() {

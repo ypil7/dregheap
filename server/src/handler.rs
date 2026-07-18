@@ -3,9 +3,9 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::protocol::RequestMethod::{Get, Set};
-use crate::protocol::{self, Request, Response};
 use crate::store::AsyncStore;
+use protocol::RequestMethod::{Get, Set};
+use protocol::{self, Request, Response};
 
 // Controller
 pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
@@ -65,11 +65,11 @@ fn process_request(req: Request, store: AsyncStore) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches, assert_eq};
-    use std::sync::{Mutex, Arc};
+    use std::sync::{Arc, Mutex};
+    use std::{assert_eq, assert_matches};
 
-    use crate::store;
     use super::*;
+    use crate::store;
 
     #[test]
     fn set_then_get_returns_value() {
@@ -82,7 +82,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Set,
             key: test_key.clone(),
-            value: test_value.clone()
+            value: test_value.clone(),
         };
 
         // When
@@ -95,7 +95,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Get,
             key: test_key.clone(),
-            value: None
+            value: None,
         };
 
         // When
@@ -117,7 +117,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Get,
             key: test_key.clone(),
-            value: test_value.clone()
+            value: test_value.clone(),
         };
 
         // When
@@ -138,7 +138,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Set,
             key: test_key.clone(),
-            value: test_value.clone()
+            value: test_value.clone(),
         };
         _ = process_request(req, store.clone());
 
@@ -146,7 +146,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Set,
             key: test_key.clone(),
-            value: None
+            value: None,
         };
         _ = process_request(req, store.clone());
 
@@ -154,7 +154,7 @@ mod tests {
         let req = Request {
             method: protocol::RequestMethod::Get,
             key: test_key.clone(),
-            value: test_value.clone()
+            value: test_value.clone(),
         };
         let res = process_request(req, store.clone());
 

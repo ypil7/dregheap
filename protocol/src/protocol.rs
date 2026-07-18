@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-use crate::errors::Result;
-
 #[derive(Serialize_repr, Deserialize_repr, Debug, Clone)]
 #[repr(u8)]
 pub enum RequestMethod {
@@ -15,13 +13,6 @@ pub struct Request {
     pub method: RequestMethod,
     pub key: String,
     pub value: Option<Vec<u8>>,
-}
-
-impl Request {
-    pub fn validate(&self) -> Result<()> {
-        // Check that value is Some() if method is Set and None() if method is Get
-        todo!()
-    }
 }
 
 #[derive(Serialize_repr, Deserialize_repr, Debug, Clone)]

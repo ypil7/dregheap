@@ -6,7 +6,13 @@ fmt:
     cargo +nightly fmt
 
 lint:
-    cargo clippy
+    cargo clippy --workspace --all-targets
 
 lint-fix:
-    cargo clippy --fix
+    cargo clippy --workspace --all-targets --fix
+
+test:
+    cargo test --workspace
+
+run TARGET:
+    cargo run -p {{TARGET}}
