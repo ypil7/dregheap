@@ -78,26 +78,87 @@ mod tests {
         let test_key = "test1".to_string();
         let test_value: Option<Vec<u8>> = Some("some random test value".into());
 
+        // Given
         let req = Request {
             method: protocol::RequestMethod::Set,
             key: test_key.clone(),
             value: test_value.clone()
         };
 
+        // When
         let res = process_request(req, store.clone());
+
+        // Then
         assert_matches!(res.status, protocol::ResponseStatus::Ok);
 
+        // Given, dependent on last request
         let req = Request {
             method: protocol::RequestMethod::Get,
             key: test_key.clone(),
             value: None
         };
+
+        // When
         let res = process_request(req, store.clone());
+
+        // Then
         assert_matches!(res.status, protocol::ResponseStatus::Ok);
         assert_eq!(res.value, test_value);
     }
 
     #[test]
     fn get_missing_key_errors() {
+        let store = Arc::new(Mutex::new(store::make_store()));
+
+        let test_key = "test2".to_string();
+        let test_value: Option<Vec<u8>> = Some("some other random test value".into());
+
+        // Given
+        let req = Request {
+            method: protocol::RequestMethod::Get,
+            key: test_key.clone(),
+            value: test_value.clone()
+        };
+
+        // When
+        let res = process_request(req, store.clone());
+
+        // Then
+        assert_matches!(res.status, protocol::ResponseStatus::Error);
+    }
+
+    #[test]
+    fn set_with_none_deletes_value() {
+        let store = Arc::new(Mutex::new(store::make_store()));
+
+        let test_key = "test3".to_string();
+        let test_value: Option<Vec<u8>> = Some("yet another random test value".into());
+
+        // Given
+        let req = Request {
+            method: protocol::RequestMethod::Set,
+            key: test_key.clone(),
+            value: test_value.clone()
+        };
+        _ = process_request(req, store.clone());
+
+        // And
+        let req = Request {
+            method: protocol::RequestMethod::Set,
+            key: test_key.clone(),
+            value: None
+        };
+        _ = process_request(req, store.clone());
+
+        // When
+        let req = Request {
+            method: protocol::RequestMethod::Get,
+            key: test_key.clone(),
+            value: test_value.clone()
+        };
+        let res = process_request(req, store.clone());
+
+        // Then
+        assert_matches!(res.status, protocol::ResponseStatus::Error);
     }
 }
