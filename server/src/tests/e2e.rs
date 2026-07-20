@@ -51,23 +51,39 @@ async fn send_request(addr: SocketAddr, request: Request) -> Response {
         .serialize(&mut Serializer::new(&mut request_buf))
         .expect("test request should serialize");
 
-    send_raw(addr, &request_buf).await
+    send_body(addr, &request_buf).await
 }
 
-async fn send_raw(addr: SocketAddr, bytes: &[u8]) -> Response {
+async fn send_body(addr: SocketAddr, body: &[u8]) -> Response {
     let mut stream = TcpStream::connect(addr)
         .await
         .expect("client should connect to test server");
+    let body_len = u32::try_from(body.len()).expect("test request body should fit in u32");
     stream
-        .write_all(bytes)
+        .write_all(&body_len.to_be_bytes())
         .await
-        .expect("client should write request bytes");
+        .expect("client should write request length");
+    stream
+        .write_all(body)
+        .await
+        .expect("client should write request body");
 
-    let mut response_buf = Vec::new();
+    read_response(&mut stream).await
+}
+
+async fn read_response(stream: &mut TcpStream) -> Response {
+    let mut length_buf = [0u8; 4];
     stream
-        .read_to_end(&mut response_buf)
+        .read_exact(&mut length_buf)
         .await
-        .expect("client should read response bytes");
+        .expect("client should read response length");
+
+    let response_len = u32::from_be_bytes(length_buf) as usize;
+    let mut response_buf = vec![0; response_len];
+    stream
+        .read_exact(&mut response_buf)
+        .await
+        .expect("client should read response body");
 
     rmp_serde::from_slice(&response_buf).expect("server response should be valid MessagePack")
 }
@@ -90,6 +106,7 @@ async fn creates_and_gets_value() {
 
     assert!(matches!(response.status, ResponseStatus::Ok));
     assert_eq!(response.value, None);
+    assert_eq!(response.error_code, None);
 
     let response = send_request(
         server.addr,
@@ -103,6 +120,7 @@ async fn creates_and_gets_value() {
 
     assert!(matches!(response.status, ResponseStatus::Ok));
     assert_eq!(response.value, Some(value));
+    assert_eq!(response.error_code, None);
 
     server.shutdown().await;
 }
@@ -122,17 +140,19 @@ async fn deletes_value() {
     )
     .await;
     assert!(matches!(response.status, ResponseStatus::Ok));
+    assert_eq!(response.error_code, None);
 
     let response = send_request(
         server.addr,
         Request {
-            method: RequestMethod::Set,
+            method: RequestMethod::Delete,
             key: key.clone(),
             value: None,
         },
     )
     .await;
     assert!(matches!(response.status, ResponseStatus::Ok));
+    assert_eq!(response.error_code, None);
 
     let response = send_request(
         server.addr,
@@ -146,6 +166,10 @@ async fn deletes_value() {
 
     assert!(matches!(response.status, ResponseStatus::Error));
     assert_eq!(response.value, None);
+    assert_eq!(
+        response.error_code,
+        Some(protocol::ResponseErrorCode::NotFound)
+    );
 
     server.shutdown().await;
 }
@@ -166,6 +190,10 @@ async fn returns_error_for_missing_value() {
 
     assert!(matches!(response.status, ResponseStatus::Error));
     assert_eq!(response.value, None);
+    assert_eq!(
+        response.error_code,
+        Some(protocol::ResponseErrorCode::NotFound)
+    );
 
     server.shutdown().await;
 }
@@ -174,11 +202,15 @@ async fn returns_error_for_missing_value() {
 async fn returns_error_for_malformed_request() {
     let server = TestServer::start().await;
 
-    let response = send_raw(server.addr, b"not messagepack").await;
+    let response = send_body(server.addr, b"not messagepack").await;
 
     assert!(matches!(response.status, ResponseStatus::Error));
     assert_eq!(response.value, None);
-    assert!(response.message.starts_with("Malformed request:"));
+    assert_eq!(
+        response.error_code,
+        Some(protocol::ResponseErrorCode::MalformedRequest)
+    );
+    assert!(response.message.starts_with("malformed request body:"));
 
     server.shutdown().await;
 }

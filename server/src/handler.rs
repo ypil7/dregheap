@@ -4,169 +4,108 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::store::AsyncStore;
-use protocol::RequestMethod::{Get, Set};
-use protocol::{self, Request, Response};
+use protocol::RequestMethod::{Delete, Get, Set};
+use protocol::{self, Request, Response, ResponseErrorCode, ResponseStatus};
+
+const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
 
 // Controller
 pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
-    let mut receive_buf = vec![0u8; 4096];
-    let bytes_read = match socket.read(&mut receive_buf).await {
-        Ok(bytes_read) => bytes_read,
-        Err(e) => {
-            log::error!("failed reading from socket: {}", e);
-            return;
-        }
-    };
-
-    let response = match rmp_serde::from_slice(&receive_buf[..bytes_read]) {
+    let response = match read_request(&mut socket).await {
         Ok(request) => process_request(request, store),
-        Err(e) => Response {
-            status: protocol::ResponseStatus::Error,
-            message: format!("Malformed request: {}", e),
-            value: None,
-        },
+        Err(e) => error_response(ResponseErrorCode::MalformedRequest, e),
     };
 
+    if let Err(e) = write_response(&mut socket, &response).await {
+        log::error!("failed writing response to socket: {}", e);
+    }
+}
+
+async fn read_request(socket: &mut TcpStream) -> Result<Request, String> {
+    let mut length_buf = [0u8; 4];
+    socket
+        .read_exact(&mut length_buf)
+        .await
+        .map_err(|e| format!("failed reading request length: {}", e))?;
+
+    let request_len = u32::from_be_bytes(length_buf);
+    if request_len > MAX_REQUEST_BYTES {
+        return Err(format!(
+            "request is too large: {} bytes exceeds {} byte limit",
+            request_len, MAX_REQUEST_BYTES
+        ));
+    }
+
+    let mut receive_buf = vec![0; request_len as usize];
+    socket
+        .read_exact(&mut receive_buf)
+        .await
+        .map_err(|e| format!("failed reading request body: {}", e))?;
+
+    rmp_serde::from_slice(&receive_buf).map_err(|e| format!("malformed request body: {}", e))
+}
+
+async fn write_response(socket: &mut TcpStream, response: &Response) -> std::io::Result<()> {
     let mut send_buf = Vec::<u8>::new();
     response
         .serialize(&mut Serializer::new(&mut send_buf))
         .unwrap();
-    if socket.write(&send_buf).await.is_err() {}
+
+    let response_len =
+        u32::try_from(send_buf.len()).expect("serialized response should fit in u32");
+    socket.write_all(&response_len.to_be_bytes()).await?;
+    socket.write_all(&send_buf).await
 }
 
 // Service
-fn process_request(req: Request, store: AsyncStore) -> Response {
+pub fn process_request(req: Request, store: AsyncStore) -> Response {
     match req.method {
         Set => {
+            let Some(value) = req.value else {
+                return error_response(
+                    ResponseErrorCode::InvalidRequest,
+                    "Set requests must include a value",
+                );
+            };
+
             let mut store = store.lock().unwrap();
-            if let Err(e) = store.set(req.key, req.value) {
-                Response {
-                    status: protocol::ResponseStatus::Error,
-                    message: e.to_string(),
-                    value: None,
-                }
+            if let Err(e) = store.set(req.key, Some(value)) {
+                error_response(ResponseErrorCode::Internal, e.to_string())
             } else {
-                Response {
-                    status: protocol::ResponseStatus::Ok,
-                    message: "Success".to_string(),
-                    value: None,
-                }
+                ok_response("Success", None)
             }
         }
         Get => {
             let store = store.lock().unwrap();
             match store.get(&req.key) {
-                Ok(val) => protocol::Response {
-                    status: protocol::ResponseStatus::Ok,
-                    message: "found value".into(),
-                    value: Some(val.clone()),
-                },
-                Err(e) => protocol::Response {
-                    status: protocol::ResponseStatus::Error,
-                    message: e.to_string(),
-                    value: None,
-                },
+                Ok(val) => ok_response("found value", Some(val)),
+                Err(e) => error_response(ResponseErrorCode::NotFound, e.to_string()),
+            }
+        }
+        Delete => {
+            let mut store = store.lock().unwrap();
+            match store.set(req.key, None) {
+                Ok(()) => ok_response("Deleted", None),
+                Err(e) => error_response(ResponseErrorCode::Internal, e.to_string()),
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-    use std::{assert_eq, assert_matches};
-
-    use super::*;
-    use crate::store;
-
-    #[test]
-    fn set_then_get_returns_value() {
-        let store = Arc::new(Mutex::new(store::make_store()));
-
-        let test_key = "test1".to_string();
-        let test_value: Option<Vec<u8>> = Some("some random test value".into());
-
-        // Given
-        let req = Request {
-            method: protocol::RequestMethod::Set,
-            key: test_key.clone(),
-            value: test_value.clone(),
-        };
-
-        // When
-        let res = process_request(req, store.clone());
-
-        // Then
-        assert_matches!(res.status, protocol::ResponseStatus::Ok);
-
-        // Given, dependent on last request
-        let req = Request {
-            method: protocol::RequestMethod::Get,
-            key: test_key.clone(),
-            value: None,
-        };
-
-        // When
-        let res = process_request(req, store.clone());
-
-        // Then
-        assert_matches!(res.status, protocol::ResponseStatus::Ok);
-        assert_eq!(res.value, test_value);
+fn ok_response(message: impl Into<String>, value: Option<Vec<u8>>) -> Response {
+    Response {
+        status: ResponseStatus::Ok,
+        message: message.into(),
+        value,
+        error_code: None,
     }
+}
 
-    #[test]
-    fn get_missing_key_errors() {
-        let store = Arc::new(Mutex::new(store::make_store()));
-
-        let test_key = "test2".to_string();
-        let test_value: Option<Vec<u8>> = Some("some other random test value".into());
-
-        // Given
-        let req = Request {
-            method: protocol::RequestMethod::Get,
-            key: test_key.clone(),
-            value: test_value.clone(),
-        };
-
-        // When
-        let res = process_request(req, store.clone());
-
-        // Then
-        assert_matches!(res.status, protocol::ResponseStatus::Error);
-    }
-
-    #[test]
-    fn set_with_none_deletes_value() {
-        let store = Arc::new(Mutex::new(store::make_store()));
-
-        let test_key = "test3".to_string();
-        let test_value: Option<Vec<u8>> = Some("yet another random test value".into());
-
-        // Given
-        let req = Request {
-            method: protocol::RequestMethod::Set,
-            key: test_key.clone(),
-            value: test_value.clone(),
-        };
-        _ = process_request(req, store.clone());
-
-        // And
-        let req = Request {
-            method: protocol::RequestMethod::Set,
-            key: test_key.clone(),
-            value: None,
-        };
-        _ = process_request(req, store.clone());
-
-        // When
-        let req = Request {
-            method: protocol::RequestMethod::Get,
-            key: test_key.clone(),
-            value: test_value.clone(),
-        };
-        let res = process_request(req, store.clone());
-
-        // Then
-        assert_matches!(res.status, protocol::ResponseStatus::Error);
+fn error_response(code: ResponseErrorCode, message: impl Into<String>) -> Response {
+    Response {
+        status: ResponseStatus::Error,
+        message: message.into(),
+        value: None,
+        error_code: Some(code),
     }
 }
