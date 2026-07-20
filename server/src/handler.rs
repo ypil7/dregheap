@@ -10,14 +10,22 @@ use protocol::{self, Request, Response};
 // Controller
 pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
     let mut receive_buf = vec![0u8; 4096];
-    if let Err(e) = socket.read(&mut receive_buf).await {
-        panic!("failed reading from socket: {}", e)
+    let bytes_read = match socket.read(&mut receive_buf).await {
+        Ok(bytes_read) => bytes_read,
+        Err(e) => {
+            log::error!("failed reading from socket: {}", e);
+            return;
+        }
     };
 
-    let request: protocol::Request = rmp_serde::from_slice(&receive_buf).unwrap();
-
-    // process request
-    let response = process_request(request, store);
+    let response = match rmp_serde::from_slice(&receive_buf[..bytes_read]) {
+        Ok(request) => process_request(request, store),
+        Err(e) => Response {
+            status: protocol::ResponseStatus::Error,
+            message: format!("Malformed request: {}", e),
+            value: None,
+        },
+    };
 
     let mut send_buf = Vec::<u8>::new();
     response
