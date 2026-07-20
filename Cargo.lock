@@ -39,13 +39,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "protocol",
-]
-
-[[package]]
 name = "colored"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -83,6 +76,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "dreg_server"
+version = "0.1.0"
+dependencies = [
+ "envy",
+ "log",
+ "logforth",
+ "protocol",
+ "rmp-serde",
+ "serde",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -486,20 +493,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.0",
-]
-
-[[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "envy",
- "log",
- "logforth",
- "protocol",
- "rmp-serde",
- "serde",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

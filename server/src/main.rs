@@ -1,12 +1,11 @@
 use core::panic;
-use server::store::make_store;
+use dreg_server::store::make_store;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 
-use server::*;
+use dreg_server::*;
 
 #[tokio::main]
 async fn main() {
@@ -22,34 +21,21 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("Failed to bind TCP Listener to: {}, error: {}", &ip_addr, e));
 
+    let store = Arc::new(Mutex::new(make_store()));
+    let cancel_token = CancellationToken::new();
+    let server_handle = server::Server::new(store, cancel_token.clone(), listener).start();
+
     log::info!("Starting server on port: {}", cfg.port);
 
-    let store = Arc::new(Mutex::new(make_store()));
+    terminate_signal().await;
 
-    let cancel_token = CancellationToken::new();
-    let dispatch_token = cancel_token.clone();
+    cancel_token.cancel();
 
-    let dispatch = tokio::spawn(async move {
-        let tracker = TaskTracker::new();
+    // wait for all tasks to finish
+    server_handle.await.unwrap();
+}
 
-        loop {
-            tokio::select! {
-                _ = dispatch_token.cancelled() => {
-                    break;
-                }
-                res = listener.accept() => {
-                    let (socket, _) = res.unwrap();
-                    let store_handle = store.clone();
-                    tracker.spawn(handler::handle_request(socket, store_handle));
-                }
-            }
-        }
-
-        tracker.close();
-        tracker.wait().await;
-        log::info!("Shutting down server");
-    });
-
+async fn terminate_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -71,8 +57,4 @@ async fn main() {
         _ = ctrl_c => {},
         _ = terminate => {},
     };
-
-    cancel_token.cancel();
-
-    dispatch.await.unwrap();
 }

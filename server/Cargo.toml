@@ -1,5 +1,5 @@
 [package]
-name = "server"
+name = "dreg_server"
 version = "0.1.0"
 edition = "2024"
 
@@ -10,7 +10,7 @@ serde = { workspace = true }
 rmp-serde = { workspace = true }
 log = { workspace = true }
 logforth = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0", features = ["full"] }
 envy = "0.4"
