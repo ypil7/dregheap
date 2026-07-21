@@ -1,5 +1,6 @@
 use rmp_serde::Serializer;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -21,28 +22,40 @@ enum ReadRequestOutcome {
 // Controller
 pub async fn handle_request(
     mut socket: TcpStream,
+    cancel_token: CancellationToken,
     store: AsyncStore,
     read_timeout: Duration,
     write_timeout: Duration,
 ) {
     loop {
-        let response = match read_request_with_timeout(&mut socket, read_timeout).await {
-            ReadRequestOutcome::Request(request) => process_request(request, store.clone()),
-            ReadRequestOutcome::ProtocolError(e) => {
-                let response = error_response(ResponseErrorCode::MalformedRequest, e);
-                if let Err(e) =
-                    write_response_with_timeout(&mut socket, &response, write_timeout).await
-                {
-                    log::error!("failed writing response to socket: {}", e);
-                }
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
                 break;
-            }
-            ReadRequestOutcome::Close => break,
-        };
+            },
+            close = async {
+                let response = match read_request_with_timeout(&mut socket, read_timeout).await {
+                    ReadRequestOutcome::Request(request) => process_request(request, store.clone()),
+                    ReadRequestOutcome::ProtocolError(e) => {
+                        let response = error_response(ResponseErrorCode::MalformedRequest, e);
+                        if let Err(e) =
+                            write_response_with_timeout(&mut socket, &response, write_timeout).await
+                        {
+                            log::error!("failed writing response to socket: {}", e);
+                        }
+                        return true;
+                    }
+                    ReadRequestOutcome::Close => return true,
+                };
 
-        if let Err(e) = write_response_with_timeout(&mut socket, &response, write_timeout).await {
-            log::error!("failed writing response to socket: {}", e);
-            break;
+                if let Err(e) = write_response_with_timeout(&mut socket, &response, write_timeout).await {
+                    log::error!("failed writing response to socket: {}", e);
+                    return true;
+                }
+
+                return false;
+            } => {
+                if close { break; };
+            }
         }
     }
 }

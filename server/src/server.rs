@@ -58,6 +58,7 @@ impl Server {
                         let store_handle = self.store.clone();
                         tracker.spawn(handler::handle_request(
                             socket,
+                            self.cancel_token.clone(),
                             store_handle,
                             self.connection_config.read_timeout,
                             self.connection_config.write_timeout,
