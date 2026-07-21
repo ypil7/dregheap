@@ -1,8 +1,10 @@
 use rmp_serde::Serializer;
 use serde::Serialize;
 use std::io::ErrorKind;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 use crate::store::AsyncStore;
 use protocol::RequestMethod::{Delete, Get, Set};
@@ -17,13 +19,20 @@ enum ReadRequestOutcome {
 }
 
 // Controller
-pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
+pub async fn handle_request(
+    mut socket: TcpStream,
+    store: AsyncStore,
+    read_timeout: Duration,
+    write_timeout: Duration,
+) {
     loop {
-        let response = match read_request(&mut socket).await {
+        let response = match read_request_with_timeout(&mut socket, read_timeout).await {
             ReadRequestOutcome::Request(request) => process_request(request, store.clone()),
             ReadRequestOutcome::ProtocolError(e) => {
                 let response = error_response(ResponseErrorCode::MalformedRequest, e);
-                if let Err(e) = write_response(&mut socket, &response).await {
+                if let Err(e) =
+                    write_response_with_timeout(&mut socket, &response, write_timeout).await
+                {
                     log::error!("failed writing response to socket: {}", e);
                 }
                 break;
@@ -31,9 +40,22 @@ pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
             ReadRequestOutcome::Close => break,
         };
 
-        if let Err(e) = write_response(&mut socket, &response).await {
+        if let Err(e) = write_response_with_timeout(&mut socket, &response, write_timeout).await {
             log::error!("failed writing response to socket: {}", e);
             break;
+        }
+    }
+}
+
+async fn read_request_with_timeout(
+    socket: &mut TcpStream,
+    read_timeout: Duration,
+) -> ReadRequestOutcome {
+    match timeout(read_timeout, read_request(socket)).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            log::debug!("closing connection after request read timeout");
+            ReadRequestOutcome::Close
         }
     }
 }
@@ -74,7 +96,24 @@ fn should_close(read_result: std::io::Result<usize>) -> bool {
     }
 }
 
-async fn write_response(socket: &mut TcpStream, response: &Response) -> std::io::Result<()> {
+async fn write_response_with_timeout(
+    socket: &mut (impl AsyncWrite + Unpin),
+    response: &Response,
+    write_timeout: Duration,
+) -> std::io::Result<()> {
+    match timeout(write_timeout, write_response(socket, response)).await {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "response write timed out",
+        )),
+    }
+}
+
+async fn write_response(
+    socket: &mut (impl AsyncWrite + Unpin),
+    response: &Response,
+) -> std::io::Result<()> {
     let mut send_buf = Vec::<u8>::new();
     response
         .serialize(&mut Serializer::new(&mut send_buf))
@@ -136,5 +175,44 @@ fn error_response(code: ResponseErrorCode, message: impl Into<String>) -> Respon
         message: message.into(),
         value: None,
         error_code: Some(code),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    struct PendingWriter;
+
+    impl AsyncWrite for PendingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn write_response_times_out_when_writer_stalls() {
+        let mut writer = PendingWriter;
+        let response = ok_response("Success", None);
+
+        let err = write_response_with_timeout(&mut writer, &response, Duration::from_millis(1))
+            .await
+            .expect_err("stalled writer should time out");
+
+        assert_eq!(err.kind(), ErrorKind::TimedOut);
     }
 }

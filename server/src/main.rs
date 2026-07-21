@@ -23,7 +23,12 @@ async fn main() {
 
     let store = Arc::new(Mutex::new(make_store()));
     let cancel_token = CancellationToken::new();
-    let server_handle = server::Server::new(store, cancel_token.clone(), listener).start();
+    let connection_config = server::ConnectionConfig {
+        read_timeout: cfg.read_timeout(),
+        write_timeout: cfg.write_timeout(),
+    };
+    let server_handle =
+        server::Server::new(store, cancel_token.clone(), listener, connection_config).start();
 
     log::info!("Starting server on port: {}", cfg.port);
 

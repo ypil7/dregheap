@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::errors::{Error, Result};
 
@@ -6,6 +7,10 @@ use crate::errors::{Error, Result};
 pub struct Config {
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_read_timeout_ms")]
+    pub read_timeout_ms: u64,
+    #[serde(default = "default_write_timeout_ms")]
+    pub write_timeout_ms: u64,
 }
 
 pub fn load_config() -> Result<Config> {
@@ -27,6 +32,32 @@ impl Config {
                 self.port
             )));
         }
+        if self.read_timeout_ms == 0 {
+            return Err(Error::Custom(
+                "Invalid read timeout: must be greater than 0ms".to_string(),
+            ));
+        }
+        if self.write_timeout_ms == 0 {
+            return Err(Error::Custom(
+                "Invalid write timeout: must be greater than 0ms".to_string(),
+            ));
+        }
         Ok(())
     }
+
+    pub fn read_timeout(&self) -> Duration {
+        Duration::from_millis(self.read_timeout_ms)
+    }
+
+    pub fn write_timeout(&self) -> Duration {
+        Duration::from_millis(self.write_timeout_ms)
+    }
+}
+
+fn default_read_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_write_timeout_ms() -> u64 {
+    10_000
 }

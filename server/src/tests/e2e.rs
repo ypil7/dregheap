@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::server;
+use crate::server::{self, ConnectionConfig};
 use crate::store::make_store;
 
 struct TestServer {
@@ -22,6 +22,10 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        Self::start_with_connection_config(ConnectionConfig::default()).await
+    }
+
+    async fn start_with_connection_config(connection_config: ConnectionConfig) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind to an available port");
@@ -30,7 +34,8 @@ impl TestServer {
             .expect("bound test listener should have a local address");
         let store = Arc::new(Mutex::new(make_store()));
         let cancel_token = CancellationToken::new();
-        let handle = server::Server::new(store, cancel_token.clone(), listener).start();
+        let handle =
+            server::Server::new(store, cancel_token.clone(), listener, connection_config).start();
 
         Self {
             addr,
@@ -274,6 +279,58 @@ async fn closes_after_malformed_request_response() {
     let bytes_read = timeout(Duration::from_secs(1), stream.read(&mut buf))
         .await
         .expect("server should close connection after malformed request")
+        .expect("client should read connection close");
+    assert_eq!(bytes_read, 0);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn closes_when_request_length_read_times_out() {
+    let server = TestServer::start_with_connection_config(ConnectionConfig {
+        read_timeout: Duration::from_millis(25),
+        write_timeout: Duration::from_secs(10),
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(server.addr)
+        .await
+        .expect("client should connect to test server");
+
+    let mut buf = [0u8; 1];
+    let bytes_read = timeout(Duration::from_secs(1), stream.read(&mut buf))
+        .await
+        .expect("server should close connection after read timeout")
+        .expect("client should read connection close");
+    assert_eq!(bytes_read, 0);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn closes_when_request_body_read_times_out() {
+    let server = TestServer::start_with_connection_config(ConnectionConfig {
+        read_timeout: Duration::from_millis(25),
+        write_timeout: Duration::from_secs(10),
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(server.addr)
+        .await
+        .expect("client should connect to test server");
+    stream
+        .write_all(&4u32.to_be_bytes())
+        .await
+        .expect("client should write request length");
+    stream
+        .write_all(&[0])
+        .await
+        .expect("client should write partial request body");
+
+    let mut buf = [0u8; 1];
+    let bytes_read = timeout(Duration::from_secs(1), stream.read(&mut buf))
+        .await
+        .expect("server should close connection after read timeout")
         .expect("client should read connection close");
     assert_eq!(bytes_read, 0);
 
