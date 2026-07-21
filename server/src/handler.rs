@@ -1,11 +1,11 @@
 use rmp_serde::Serializer;
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 use crate::store::AsyncStore;
 use protocol::RequestMethod::{Delete, Get, Set};
@@ -52,7 +52,7 @@ pub async fn handle_request(
                     return true;
                 }
 
-                return false;
+                false
             } => {
                 if close { break; };
             }
@@ -130,10 +130,22 @@ async fn write_response(
     let mut send_buf = Vec::<u8>::new();
     response
         .serialize(&mut Serializer::new(&mut send_buf))
-        .unwrap();
+        .map_err(|e| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("failed serializing response: {}", e),
+            )
+        })?;
 
-    let response_len =
-        u32::try_from(send_buf.len()).expect("serialized response should fit in u32");
+    let response_len = u32::try_from(send_buf.len()).map_err(|_| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "response is too large: {} bytes exceeds u32 limit",
+                send_buf.len()
+            ),
+        )
+    })?;
     socket.write_all(&response_len.to_be_bytes()).await?;
     socket.write_all(&send_buf).await
 }
@@ -149,7 +161,9 @@ pub fn process_request(req: Request, store: AsyncStore) -> Response {
                 );
             };
 
-            let mut store = store.lock().unwrap();
+            let Ok(mut store) = store.lock() else {
+                return error_response(ResponseErrorCode::Internal, "store lock is poisoned");
+            };
             if let Err(e) = store.set(req.key, Some(value)) {
                 error_response(ResponseErrorCode::Internal, e.to_string())
             } else {
@@ -157,14 +171,18 @@ pub fn process_request(req: Request, store: AsyncStore) -> Response {
             }
         }
         Get => {
-            let store = store.lock().unwrap();
+            let Ok(store) = store.lock() else {
+                return error_response(ResponseErrorCode::Internal, "store lock is poisoned");
+            };
             match store.get(&req.key) {
                 Ok(val) => ok_response("found value", Some(val)),
                 Err(e) => error_response(ResponseErrorCode::NotFound, e.to_string()),
             }
         }
         Delete => {
-            let mut store = store.lock().unwrap();
+            let Ok(mut store) = store.lock() else {
+                return error_response(ResponseErrorCode::Internal, "store lock is poisoned");
+            };
             match store.set(req.key, None) {
                 Ok(()) => ok_response("Deleted", None),
                 Err(e) => error_response(ResponseErrorCode::Internal, e.to_string()),
@@ -227,5 +245,28 @@ mod tests {
             .expect_err("stalled writer should time out");
 
         assert_eq!(err.kind(), ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn process_request_returns_internal_error_when_store_lock_is_poisoned() {
+        let store = std::sync::Arc::new(std::sync::Mutex::new(crate::store::make_store()));
+
+        let poison_store = store.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poison_store.lock().unwrap();
+            panic!("poison store lock");
+        });
+
+        let response = process_request(
+            Request {
+                method: Get,
+                key: "key".to_string(),
+                value: None,
+            },
+            store,
+        );
+
+        assert_eq!(response.status, ResponseStatus::Error);
+        assert_eq!(response.error_code, Some(ResponseErrorCode::Internal));
     }
 }

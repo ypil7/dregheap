@@ -54,7 +54,13 @@ impl Server {
                         break;
                     }
                     res = self.listener.accept() => {
-                        let (socket, _) = res.unwrap();
+                        let (socket, _) = match res {
+                            Ok(r) => r,
+                            Err(e) => {
+                                log::error!("failed opening socket: {}", e);
+                                continue;
+                            }
+                        };
                         let store_handle = self.store.clone();
                         tracker.spawn(handler::handle_request(
                             socket,
