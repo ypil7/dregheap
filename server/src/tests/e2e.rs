@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use protocol::{Request, RequestMethod, Response, ResponseStatus};
 use rmp_serde::Serializer;
@@ -7,6 +8,7 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::server;
@@ -39,8 +41,9 @@ impl TestServer {
 
     async fn shutdown(self) {
         self.cancel_token.cancel();
-        self.handle
+        timeout(Duration::from_secs(1), self.handle)
             .await
+            .expect("test server should shut down within timeout")
             .expect("test server task should shut down cleanly");
     }
 }
@@ -211,6 +214,68 @@ async fn returns_error_for_malformed_request() {
         Some(protocol::ResponseErrorCode::MalformedRequest)
     );
     assert!(response.message.starts_with("malformed request body:"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn closes_when_client_disconnects_before_request() {
+    let server = TestServer::start().await;
+
+    let stream = TcpStream::connect(server.addr)
+        .await
+        .expect("client should connect to test server");
+    drop(stream);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn closes_when_client_disconnects_during_request_length() {
+    let server = TestServer::start().await;
+
+    let mut stream = TcpStream::connect(server.addr)
+        .await
+        .expect("client should connect to test server");
+    stream
+        .write_all(&[0])
+        .await
+        .expect("client should write partial request length");
+    drop(stream);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn closes_after_malformed_request_response() {
+    let server = TestServer::start().await;
+
+    let mut stream = TcpStream::connect(server.addr)
+        .await
+        .expect("client should connect to test server");
+    let body = b"not messagepack";
+    stream
+        .write_all(&(body.len() as u32).to_be_bytes())
+        .await
+        .expect("client should write request length");
+    stream
+        .write_all(body)
+        .await
+        .expect("client should write request body");
+
+    let response = read_response(&mut stream).await;
+    assert!(matches!(response.status, ResponseStatus::Error));
+    assert_eq!(
+        response.error_code,
+        Some(protocol::ResponseErrorCode::MalformedRequest)
+    );
+
+    let mut buf = [0u8; 1];
+    let bytes_read = timeout(Duration::from_secs(1), stream.read(&mut buf))
+        .await
+        .expect("server should close connection after malformed request")
+        .expect("client should read connection close");
+    assert_eq!(bytes_read, 0);
 
     server.shutdown().await;
 }

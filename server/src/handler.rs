@@ -1,5 +1,6 @@
 use rmp_serde::Serializer;
 use serde::Serialize;
+use std::io::ErrorKind;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -9,40 +10,68 @@ use protocol::{self, Request, Response, ResponseErrorCode, ResponseStatus};
 
 const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
 
+enum ReadRequestOutcome {
+    Request(Request),
+    ProtocolError(String),
+    Close,
+}
+
 // Controller
 pub async fn handle_request(mut socket: TcpStream, store: AsyncStore) {
-    let response = match read_request(&mut socket).await {
-        Ok(request) => process_request(request, store),
-        Err(e) => error_response(ResponseErrorCode::MalformedRequest, e),
-    };
+    loop {
+        let response = match read_request(&mut socket).await {
+            ReadRequestOutcome::Request(request) => process_request(request, store.clone()),
+            ReadRequestOutcome::ProtocolError(e) => {
+                let response = error_response(ResponseErrorCode::MalformedRequest, e);
+                if let Err(e) = write_response(&mut socket, &response).await {
+                    log::error!("failed writing response to socket: {}", e);
+                }
+                break;
+            }
+            ReadRequestOutcome::Close => break,
+        };
 
-    if let Err(e) = write_response(&mut socket, &response).await {
-        log::error!("failed writing response to socket: {}", e);
+        if let Err(e) = write_response(&mut socket, &response).await {
+            log::error!("failed writing response to socket: {}", e);
+            break;
+        }
     }
 }
 
-async fn read_request(socket: &mut TcpStream) -> Result<Request, String> {
+async fn read_request(socket: &mut TcpStream) -> ReadRequestOutcome {
     let mut length_buf = [0u8; 4];
-    socket
-        .read_exact(&mut length_buf)
-        .await
-        .map_err(|e| format!("failed reading request length: {}", e))?;
+    if should_close(socket.read_exact(&mut length_buf).await) {
+        return ReadRequestOutcome::Close;
+    }
 
     let request_len = u32::from_be_bytes(length_buf);
     if request_len > MAX_REQUEST_BYTES {
-        return Err(format!(
+        return ReadRequestOutcome::ProtocolError(format!(
             "request is too large: {} bytes exceeds {} byte limit",
             request_len, MAX_REQUEST_BYTES
         ));
     }
 
     let mut receive_buf = vec![0; request_len as usize];
-    socket
-        .read_exact(&mut receive_buf)
-        .await
-        .map_err(|e| format!("failed reading request body: {}", e))?;
+    if should_close(socket.read_exact(&mut receive_buf).await) {
+        return ReadRequestOutcome::Close;
+    }
 
-    rmp_serde::from_slice(&receive_buf).map_err(|e| format!("malformed request body: {}", e))
+    match rmp_serde::from_slice(&receive_buf) {
+        Ok(request) => ReadRequestOutcome::Request(request),
+        Err(e) => ReadRequestOutcome::ProtocolError(format!("malformed request body: {}", e)),
+    }
+}
+
+fn should_close(read_result: std::io::Result<usize>) -> bool {
+    match read_result {
+        Ok(_) => false,
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => true,
+        Err(e) => {
+            log::debug!("closing connection after read error: {}", e);
+            true
+        }
+    }
 }
 
 async fn write_response(socket: &mut TcpStream, response: &Response) -> std::io::Result<()> {
