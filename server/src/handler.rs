@@ -4,7 +4,7 @@ use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 use tokio_util::sync::CancellationToken;
 
 use crate::store::AsyncStore;
@@ -12,6 +12,25 @@ use protocol::RequestMethod::{Delete, Get, Set};
 use protocol::{self, Request, Response, ResponseErrorCode, ResponseStatus};
 
 const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionConfig {
+    pub read_timeout: Duration,
+    pub write_timeout: Duration,
+    pub idle_connection_ttl: Duration,
+    pub max_connection_lifetime: Duration,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            read_timeout: Duration::from_secs(10),
+            write_timeout: Duration::from_secs(10),
+            idle_connection_ttl: Duration::from_secs(3 * 60),
+            max_connection_lifetime: Duration::from_secs(30 * 60),
+        }
+    }
+}
 
 enum ReadRequestOutcome {
     Request(Request),
@@ -24,34 +43,51 @@ pub async fn handle_request(
     mut socket: TcpStream,
     cancel_token: CancellationToken,
     store: AsyncStore,
-    read_timeout: Duration,
-    write_timeout: Duration,
+    connection_config: ConnectionConfig,
 ) {
+    let connected_at = Instant::now();
+    let mut idle_deadline = connected_at + connection_config.idle_connection_ttl;
+    let lifetime_deadline = connected_at + connection_config.max_connection_lifetime;
+
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 break;
             },
             close = async {
-                let response = match read_request_with_timeout(&mut socket, read_timeout).await {
-                    ReadRequestOutcome::Request(request) => process_request(request, store.clone()),
-                    ReadRequestOutcome::ProtocolError(e) => {
+                let read_deadline = Instant::now() + connection_config.read_timeout;
+                let request_deadline =
+                    earliest_deadline(read_deadline, idle_deadline, lifetime_deadline);
+
+                let response = match timeout_at(request_deadline, read_request(&mut socket)).await {
+                    Ok(ReadRequestOutcome::Request(request)) => process_request(request, store.clone()),
+                    Ok(ReadRequestOutcome::ProtocolError(e)) => {
                         let response = error_response(ResponseErrorCode::MalformedRequest, e);
                         if let Err(e) =
-                            write_response_with_timeout(&mut socket, &response, write_timeout).await
+                            write_response_with_timeout(&mut socket, &response, connection_config.write_timeout).await
                         {
                             log::error!("failed writing response to socket: {}", e);
                         }
                         return true;
                     }
-                    ReadRequestOutcome::Close => return true,
+                    Ok(ReadRequestOutcome::Close) => return true,
+                    Err(_) => {
+                        log_timeout_close(read_deadline, idle_deadline, lifetime_deadline);
+                        return true;
+                    }
                 };
 
-                if let Err(e) = write_response_with_timeout(&mut socket, &response, write_timeout).await {
+                if let Err(e) = write_response_with_timeout(&mut socket, &response, connection_config.write_timeout).await {
                     log::error!("failed writing response to socket: {}", e);
                     return true;
                 }
 
+                if Instant::now() >= lifetime_deadline {
+                    log::debug!("closing connection after max connection lifetime ttl");
+                    return true;
+                }
+
+                idle_deadline = Instant::now() + connection_config.idle_connection_ttl;
                 false
             } => {
                 if close { break; };
@@ -60,16 +96,24 @@ pub async fn handle_request(
     }
 }
 
-async fn read_request_with_timeout(
-    socket: &mut TcpStream,
-    read_timeout: Duration,
-) -> ReadRequestOutcome {
-    match timeout(read_timeout, read_request(socket)).await {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            log::debug!("closing connection after request read timeout");
-            ReadRequestOutcome::Close
-        }
+fn earliest_deadline(
+    read_deadline: Instant,
+    idle_deadline: Instant,
+    lifetime_deadline: Instant,
+) -> Instant {
+    read_deadline.min(idle_deadline).min(lifetime_deadline)
+}
+
+fn log_timeout_close(read_deadline: Instant, idle_deadline: Instant, lifetime_deadline: Instant) {
+    let now = Instant::now();
+    if now >= lifetime_deadline {
+        log::debug!("closing connection after max connection lifetime ttl");
+    } else if now >= idle_deadline {
+        log::debug!("closing connection after idle connection ttl");
+    } else if now >= read_deadline {
+        log::debug!("closing connection after request read timeout");
+    } else {
+        log::debug!("closing connection after timeout");
     }
 }
 

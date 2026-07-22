@@ -7,10 +7,18 @@ use crate::errors::{Error, Result};
 pub struct Config {
     #[serde(default = "default_port")]
     pub port: u16,
+
     #[serde(default = "default_read_timeout_ms")]
     pub read_timeout_ms: u64,
+
     #[serde(default = "default_write_timeout_ms")]
     pub write_timeout_ms: u64,
+
+    #[serde(default = "default_idle_connection_ttl")]
+    pub idle_connection_ttl: u64,
+
+    #[serde(default = "default_max_connection_lifetime")]
+    pub max_connection_lifetime: u64,
 }
 
 pub fn load_config() -> Result<Config> {
@@ -52,6 +60,14 @@ impl Config {
     pub fn write_timeout(&self) -> Duration {
         Duration::from_millis(self.write_timeout_ms)
     }
+
+    pub fn idle_connection_ttl(&self) -> Duration {
+        Duration::from_millis(self.idle_connection_ttl)
+    }
+
+    pub fn max_connection_lifetime(&self) -> Duration {
+        Duration::from_millis(self.max_connection_lifetime)
+    }
 }
 
 fn default_read_timeout_ms() -> u64 {
@@ -60,4 +76,12 @@ fn default_read_timeout_ms() -> u64 {
 
 fn default_write_timeout_ms() -> u64 {
     10_000
+}
+
+fn default_idle_connection_ttl() -> u64 {
+    3 * 60 * 1000
+}
+
+fn default_max_connection_lifetime() -> u64 {
+    30 * 60 * 1000
 }

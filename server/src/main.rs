@@ -26,6 +26,8 @@ async fn main() {
     let connection_config = server::ConnectionConfig {
         read_timeout: cfg.read_timeout(),
         write_timeout: cfg.write_timeout(),
+        idle_connection_ttl: cfg.idle_connection_ttl(),
+        max_connection_lifetime: cfg.max_connection_lifetime(),
     };
     let server_handle =
         server::Server::new(store, cancel_token.clone(), listener, connection_config).start();

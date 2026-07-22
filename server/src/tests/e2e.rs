@@ -290,6 +290,7 @@ async fn closes_when_request_length_read_times_out() {
     let server = TestServer::start_with_connection_config(ConnectionConfig {
         read_timeout: Duration::from_millis(25),
         write_timeout: Duration::from_secs(10),
+        ..ConnectionConfig::default()
     })
     .await;
 
@@ -312,6 +313,7 @@ async fn closes_when_request_body_read_times_out() {
     let server = TestServer::start_with_connection_config(ConnectionConfig {
         read_timeout: Duration::from_millis(25),
         write_timeout: Duration::from_secs(10),
+        ..ConnectionConfig::default()
     })
     .await;
 
