@@ -1,0 +1,9 @@
+services:
+  dreg-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.local
+    ports:
+      - "6767:6767"
