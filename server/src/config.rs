@@ -19,6 +19,8 @@ pub struct Config {
 
     #[serde(default = "default_max_connection_lifetime")]
     pub max_connection_lifetime: u64,
+
+    pub max_cache_weight: Option<usize>,
 }
 
 pub fn load_config() -> Result<Config> {

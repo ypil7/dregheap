@@ -7,6 +7,7 @@ use tokio::net::TcpStream;
 use tokio::time::{Instant, timeout, timeout_at};
 use tokio_util::sync::CancellationToken;
 
+use crate::errors::Error;
 use crate::store::AsyncStore;
 use protocol::RequestMethod::{Delete, Get, Set};
 use protocol::{self, Request, Response, ResponseErrorCode, ResponseStatus};
@@ -209,13 +210,18 @@ pub fn process_request(req: Request, store: AsyncStore) -> Response {
                 return error_response(ResponseErrorCode::Internal, "store lock is poisoned");
             };
             if let Err(e) = store.set(req.key, Some(value)) {
-                error_response(ResponseErrorCode::Internal, e.to_string())
+                match e {
+                    Error::CacheEntryTooLarge(message) => {
+                        error_response(ResponseErrorCode::InvalidRequest, message)
+                    }
+                    e => error_response(ResponseErrorCode::Internal, e.to_string()),
+                }
             } else {
                 ok_response("Success", None)
             }
         }
         Get => {
-            let Ok(store) = store.lock() else {
+            let Ok(mut store) = store.lock() else {
                 return error_response(ResponseErrorCode::Internal, "store lock is poisoned");
             };
             match store.get(&req.key) {

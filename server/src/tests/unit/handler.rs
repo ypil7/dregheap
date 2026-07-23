@@ -118,3 +118,25 @@ fn set_with_none_errors() {
     assert_matches!(res.status, ResponseStatus::Error);
     assert_eq!(res.error_code, Some(ResponseErrorCode::InvalidRequest));
 }
+
+#[test]
+fn set_oversized_value_errors_as_invalid_request() {
+    let max_weight = store::CACHE_ENTRY_OVERHEAD + "key".len() + 1;
+    let store: store::AsyncStore = Arc::new(Mutex::new(Box::new(store::DregStore::new(Some(
+        max_weight,
+    )))));
+
+    // Given
+    let req = Request {
+        method: RequestMethod::Set,
+        key: "key".to_string(),
+        value: Some(b"too large".to_vec()),
+    };
+
+    // When
+    let res = process_request(req, store);
+
+    // Then
+    assert_matches!(res.status, ResponseStatus::Error);
+    assert_eq!(res.error_code, Some(ResponseErrorCode::InvalidRequest));
+}

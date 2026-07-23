@@ -1,5 +1,5 @@
 use core::panic;
-use dreg_server::store::make_store;
+use dreg_server::store::make_store_with_max_cache_weight;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -15,13 +15,19 @@ async fn main() {
 
     logforth::starter_log::stdout().apply();
 
+    if cfg.max_cache_weight.is_none() {
+        log::warn!("DREG_MAX_CACHE_WEIGHT is not set; dregstore cache is unbounded");
+    }
+
     let ip_addr = format!("0.0.0.0:{}", cfg.port);
 
     let listener = TcpListener::bind(&ip_addr)
         .await
         .unwrap_or_else(|e| panic!("Failed to bind TCP Listener to: {}, error: {}", &ip_addr, e));
 
-    let store = Arc::new(Mutex::new(make_store()));
+    let store = Arc::new(Mutex::new(make_store_with_max_cache_weight(
+        cfg.max_cache_weight,
+    )));
     let cancel_token = CancellationToken::new();
     let connection_config = server::ConnectionConfig {
         read_timeout: cfg.read_timeout(),
